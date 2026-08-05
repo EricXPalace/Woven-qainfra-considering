@@ -57,16 +57,36 @@ sequenceDiagram
 * **Logic**:
   * `app.py`: Persistent MQTT client listening to topic `safety/blackbox/dump`.
   * On receipt of a blackbox dump payload, saves the payload and programmatically executes `pytest tests/test_pipeline.py`.
-  * `test_pipeline.py`: Pytest suite verifying:
-    1. **Payload Schema Integrity**: Metadata, frame count, field presence.
-    2. **Telemetry Chronology**: Timestamp monotonicity across the 60s buffer.
-    3. **Brake System Response**: Deceleration compliance during high brake pressure events.
-    4. **Physical Limits**: Speed and steering lock boundary compliance.
-    5. **Testcontainers Integration**: Isolated container fixture support for auxiliary audit services.
+  * `test_pipeline.py`: Pytest suite verifying payload integrity, chronology, brake deceleration, and physical boundaries.
 
-### 4. Mock Telemetry Generator (Python)
+### 4. Chaos Injector & Edge Resilience Test Suite (Python)
+* **Location**: `./ci-engine/chaos_injector.py`, `./ci-engine/mock_edge_device.py`, `./ci-engine/tests/test_edge_resilience.py`
+* **Description**:
+  * `chaos_injector.py`: Utility using `paho-mqtt` to inject environmental hardware fault payloads (`{"sensor": "temperature", "value": 85}`, `{"event": "fatal_error"}`) into the broker.
+  * `mock_edge_device.py`: State machine maintaining firmware slot (`A`/`B`) and CPU frequency (`Normal`/`Throttled`).
+  * `test_edge_resilience.py`: Automated Pytest suite covering:
+    1. **Thermal Throttling Test**: Asserts that sending an 85°C heat spike causes the edge device to switch CPU frequency to `Throttled` and output `{"status": "throttling_active"}` within 3.0 seconds.
+    2. **A/B Rollback Test**: Asserts that receiving an OTA update command to Slot B alongside a fatal error payload triggers fallback to Slot A (`{"fallback_to_slot_a": true}`).
+
+### 5. Mock Telemetry Generator (Python)
 * **Location**: `./edge-node/mock_telemetry_generator.py`
 * **Description**: CLI utility simulating dynamic vehicle dynamics (fluctuating speed, brake taps, steering oscillations) and streaming sensor data to the Edge Node REST endpoint with options to trigger the Kill Switch.
+
+---
+
+## 🧪 Running Chaos & Resilience Pytest Suites
+
+To execute the chaos engineering tests locally or within container:
+
+```bash
+pytest -v ci-engine/tests/test_edge_resilience.py
+```
+
+Expected output:
+```text
+PASSED ci-engine/tests/test_edge_resilience.py::test_thermal_throttling
+PASSED ci-engine/tests/test_edge_resilience.py::test_ab_rollback_on_failed_ota
+```
 
 ---
 
@@ -132,18 +152,6 @@ Inspect the `python_ci_engine` logs to observe blackbox payload ingestion and au
 
 ```bash
 docker logs -f python_ci_engine
-```
-
-Sample output:
-```text
-[INFO] CI-Engine: 📥 Received MQTT message on topic 'safety/blackbox/dump' (18420 bytes)
-[INFO] CI-Engine: Blackbox Payload ID: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d | Frames: 50 | Trigger: MOCK_GENERATOR_KILL_SWITCH_TEST
-[INFO] CI-Engine: ⚡ Triggering Pytest Audit Execution...
-PASSED tests/test_pipeline.py::test_payload_integrity
-PASSED tests/test_pipeline.py::test_frame_chronology
-PASSED tests/test_pipeline.py::test_brake_system_response
-PASSED tests/test_pipeline.py::test_physical_limits
-[INFO] CI-Engine: ✅ SAFETY AUDIT PASSED: Vehicle telemetry meets safety bounds!
 ```
 
 ---
