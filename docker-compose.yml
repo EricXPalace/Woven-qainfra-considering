@@ -1,0 +1,66 @@
+version: "3.8"
+
+services:
+  # Eclipse Mosquitto MQTT Message Broker
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: mosquitto_broker
+    restart: always
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - safety-net
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 mosquitto_sub -t '$$SYS/#' -c 1 -i healthcheck || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Rust Edge Node Agent (Simulated Autonomous Vehicle Hardware Node)
+  edge-node:
+    build:
+      context: ./edge-node
+      dockerfile: Dockerfile
+    container_name: rust_edge_node
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info
+      - PORT=8080
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - MQTT_TOPIC=safety/blackbox/dump
+    depends_on:
+      mosquitto:
+        condition: service_started
+    networks:
+      - safety-net
+
+  # Python CI/QA Engine Listener & Test Runner
+  ci-engine:
+    build:
+      context: ./ci-engine
+      dockerfile: Dockerfile
+    container_name: python_ci_engine
+    restart: unless-stopped
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - MQTT_TOPIC=safety/blackbox/dump
+      - PAYLOAD_SAVE_PATH=/app/received_payload.json
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      mosquitto:
+        condition: service_started
+    networks:
+      - safety-net
+
+networks:
+  safety-net:
+    driver: bridge
+    name: safety_pipeline_network

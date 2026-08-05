@@ -1,0 +1,24 @@
+# Rust
+/edge-node/target/
+**/*.rs.bk
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.venv/
+venv/
+
+# Environment & Logs
+*.log
+.env
+.DS_Store
+
+# Ingested/Temp payloads
+/ci-engine/dump_*.json
+/ci-engine/received_payload.json
