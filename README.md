@@ -15,22 +15,29 @@ sequenceDiagram
     participant Edge as Edge Node (Rust)
     participant Broker as Mosquitto MQTT Broker
     participant CI as Python CI/QA Engine
+    participant Shard as Dynamic Sharder
     participant QA as Pytest Audit Suite
+    participant AI as AI Triage Agent (LLM)
 
     Note over Edge: Maintains 60s rolling telemetry buffer in RAM
     Gen->>Edge: POST /telemetry (speed, brake, steering, RPM)
-    Note over Gen,Edge: Continuous streaming...
 
     rect rgb(240, 220, 220)
     Gen->>Edge: POST /kill-switch (Emergency Trigger)
     end
 
-    Note over Edge: Packages 60s telemetry buffer into JSON payload
     Edge->>Broker: Publish JSON to topic 'safety/blackbox/dump'
     Broker->>CI: Deliver MQTT payload
-    CI->>CI: Save payload & invoke pytest
-    CI->>QA: Run test_pipeline.py (Audit Rules & Testcontainers)
-    QA-->>CI: Audit Report (Pass/Fail)
+    CI->>Shard: Calculate total log volume & partition shards
+    CI->>QA: Execute parallel test shards
+
+    alt Test Fails
+        QA->>AI: Trigger conftest.py teardown hook
+        AI->>AI: Format traceback & telemetry into Pydantic schema
+        AI-->>CI: Output Pydantic-validated AITriageReport JSON
+    else Test Passes
+        QA-->>CI: Audit Report Passed
+    end
 ```
 
 ---
@@ -51,41 +58,53 @@ sequenceDiagram
 * **Container**: `eclipse-mosquitto:2.0`
 * **Config**: `./mosquitto/config/mosquitto.conf` allowing local QA MQTT communication on port `1883`.
 
-### 3. CI/QA Engine (Python)
-* **Location**: `./ci-engine`
+### 3. CI/QA Engine & Dynamic Sharding (Python)
+* **Location**: `./ci-engine/dynamic_sharder.py`, `./ci-engine/app.py`
 * **Framework**: `paho-mqtt`, `pytest`, `testcontainers`, `pydantic`
 * **Logic**:
-  * `app.py`: Persistent MQTT client listening to topic `safety/blackbox/dump`.
-  * On receipt of a blackbox dump payload, saves the payload and programmatically executes `pytest tests/test_pipeline.py`.
-  * `test_pipeline.py`: Pytest suite verifying payload integrity, chronology, brake deceleration, and physical boundaries.
+  * `dynamic_sharder.py`: Scans incoming telemetry crash logs, calculates cumulative data volume (MB), and dynamically partitions files into balanced test shards (`shard_config.json`).
+  * `app.py`: Persistent MQTT client listening to topic `safety/blackbox/dump`. On payload receipt, triggers automated `pytest` suites.
 
 ### 4. Chaos Injector & Edge Resilience Test Suite (Python)
 * **Location**: `./ci-engine/chaos_injector.py`, `./ci-engine/mock_edge_device.py`, `./ci-engine/tests/test_edge_resilience.py`
 * **Description**:
   * `chaos_injector.py`: Utility using `paho-mqtt` to inject environmental hardware fault payloads (`{"sensor": "temperature", "value": 85}`, `{"event": "fatal_error"}`) into the broker.
   * `mock_edge_device.py`: State machine maintaining firmware slot (`A`/`B`) and CPU frequency (`Normal`/`Throttled`).
-  * `test_edge_resilience.py`: Automated Pytest suite covering:
-    1. **Thermal Throttling Test**: Asserts that sending an 85°C heat spike causes the edge device to switch CPU frequency to `Throttled` and output `{"status": "throttling_active"}` within 3.0 seconds.
-    2. **A/B Rollback Test**: Asserts that receiving an OTA update command to Slot B alongside a fatal error payload triggers fallback to Slot A (`{"fallback_to_slot_a": true}`).
+  * `test_edge_resilience.py`: Automated Pytest suite covering Thermal Throttling and A/B Rollback tests.
 
-### 5. Mock Telemetry Generator (Python)
+### 5. AI-Driven Root Cause Analysis (RCA) Agent (Python)
+* **Location**: `./ci-engine/ai_triage_agent.py`, `./ci-engine/conftest.py`
+* **Description**:
+  * `ai_triage_agent.py`: Production-grade LLM triage agent strictly validated with `Pydantic` v2 (`AITriageReport` schema with failure category, confidence score, root cause analysis, and suggested fix). Mocks local LLM (Ollama/Gemma) requests while enforcing structural typing.
+  * `conftest.py`: Pytest teardown hook (`pytest_runtest_makereport`) that intercepts test failures, extracts tracebacks & telemetry context, and automatically invokes `AITriageAgent` to generate JSON report artifacts (`triage_report_<test_name>.json`).
+
+### 6. Mock Telemetry Generator (Python)
 * **Location**: `./edge-node/mock_telemetry_generator.py`
-* **Description**: CLI utility simulating dynamic vehicle dynamics (fluctuating speed, brake taps, steering oscillations) and streaming sensor data to the Edge Node REST endpoint with options to trigger the Kill Switch.
+* **Description**: CLI utility simulating dynamic vehicle dynamics and streaming sensor data to the Edge Node REST endpoint.
 
 ---
 
-## 🧪 Running Chaos & Resilience Pytest Suites
+## ⚡ Running Dynamic Test Sharding & AI Triage
 
-To execute the chaos engineering tests locally or within container:
+### 1. Execute Dynamic Sharding Orchestration
 
 ```bash
-pytest -v ci-engine/tests/test_edge_resilience.py
+python ci-engine/dynamic_sharder.py --dir /path/to/crash_logs --target-mb 10.0 --out shard_config.json
 ```
 
-Expected output:
-```text
-PASSED ci-engine/tests/test_edge_resilience.py::test_thermal_throttling
-PASSED ci-engine/tests/test_edge_resilience.py::test_ab_rollback_on_failed_ota
+### 2. Pytest Failure Hook with AI Triage Execution
+
+When a Pytest fails, `conftest.py` automatically intercepts the failure and outputs a Pydantic-validated RCA report:
+
+```json
+{
+  "failure_category": "Thermal Throttling Timeout",
+  "confidence_score": 0.95,
+  "summary": "Mock device CPU frequency failed to throttle within 3.0s threshold following heat spike.",
+  "root_cause_analysis": "The mock hardware agent received an 85°C thermal fault, but the event loop delayed publishing the status message to MQTT.",
+  "suggested_fix": "Inspect thermal monitoring thread scheduling and ensure MQTT publish callbacks are non-blocking.",
+  "telemetry_anomaly_timestamp": "2026-08-05T20:00:00Z"
+}
 ```
 
 ---
@@ -122,36 +141,6 @@ Below is the JSON structure published over MQTT topic `safety/blackbox/dump`:
 
 ```bash
 docker-compose up --build
-```
-
-This will launch:
-* `mosquitto_broker` on `1883`
-* `rust_edge_node` on `http://localhost:8080`
-* `python_ci_engine` listening for MQTT messages
-
----
-
-### 2. Stream Mock Telemetry & Trigger Kill Switch
-
-In a separate terminal, launch the mock data generator:
-
-```bash
-python edge-node/mock_telemetry_generator.py --url http://localhost:8080 --rate 5 --trigger-kill 10
-```
-
-* Flags:
-  * `--url`: Edge Node endpoint (default: `http://localhost:8080`).
-  * `--rate`: Telemetry frequency in Hz (default: `5`).
-  * `--trigger-kill`: Automatically trigger Kill Switch after 10 seconds of streaming.
-
----
-
-### 3. Observe Automated QA Audit Trigger
-
-Inspect the `python_ci_engine` logs to observe blackbox payload ingestion and automated pytest execution:
-
-```bash
-docker logs -f python_ci_engine
 ```
 
 ---
