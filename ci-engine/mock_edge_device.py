@@ -33,7 +33,7 @@ class MockEdgeDevice:
         port: Optional[int] = None,
         client_id: str = "mock-edge-device",
     ):
-        self.host = host or os.getenv("MQTT_HOST", "localhost")
+        self.host = host or os.getenv("MQTT_BROKER_HOST", os.getenv("MQTT_HOST", "mosquitto"))
         self.port = port or int(os.getenv("MQTT_PORT", "1883"))
         self.client_id = client_id
 

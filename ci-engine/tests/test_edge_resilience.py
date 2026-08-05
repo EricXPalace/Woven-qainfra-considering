@@ -29,7 +29,7 @@ def mqtt_broker_config():
     Fixture providing MQTT host and port configuration.
     """
     return {
-        "host": os.getenv("MQTT_HOST", "localhost"),
+        "host": os.getenv("MQTT_BROKER_HOST", os.getenv("MQTT_HOST", "mosquitto")),
         "port": int(os.getenv("MQTT_PORT", "1883")),
     }
 

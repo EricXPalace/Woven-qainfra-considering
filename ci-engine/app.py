@@ -25,7 +25,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("CI-Engine")
 
-MQTT_HOST = os.getenv("MQTT_HOST", "mosquitto")
+MQTT_HOST = os.getenv("MQTT_BROKER_HOST", os.getenv("MQTT_HOST", "mosquitto"))
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "safety/blackbox/dump")
 PAYLOAD_SAVE_PATH = os.getenv("PAYLOAD_SAVE_PATH", "/app/received_payload.json")

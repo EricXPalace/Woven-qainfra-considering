@@ -73,7 +73,7 @@ class AITriageAgent:
         model_name: str = "gemma2",
         mock_mode: bool = True,
     ):
-        self.endpoint = endpoint or os.getenv("LLM_ENDPOINT", "http://localhost:11434/api/generate")
+        self.endpoint = endpoint or os.getenv("LLM_ENDPOINT", "http://ollama:11434/api/generate")
         self.model_name = model_name
         self.mock_mode = mock_mode
 
