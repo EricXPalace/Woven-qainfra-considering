@@ -181,14 +181,17 @@ async fn trigger_kill_switch(
     body: Option<Json<KillSwitchRequest>>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let reason = body
-        .map(|b| b.reason.clone())
+        .map(|b| b.0.reason)
         .unwrap_or_else(|| "KILL_SWITCH_ENGAGED".to_string());
 
-    let mut lock = state.buffer.lock().unwrap();
-    AppState::prune_buffer(&mut lock, state.max_buffer_duration_secs);
+    let (telemetry_frames, frame_count) = {
+        let mut lock = state.buffer.lock().unwrap();
+        AppState::prune_buffer(&mut lock, state.max_buffer_duration_secs);
+        let frames: Vec<TelemetryFrame> = lock.iter().cloned().collect();
+        let count = frames.len();
+        (frames, count)
+    };
 
-    let telemetry_frames: Vec<TelemetryFrame> = lock.iter().cloned().collect();
-    let frame_count = telemetry_frames.len();
     let event_id = Uuid::new_v4().to_string();
     let now = Utc::now();
 
